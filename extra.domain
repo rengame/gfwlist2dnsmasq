@@ -13,7 +13,7 @@ debian.org
 inoreader.com
 thetvdb.com
 themoviedb.org
-stackpath.bootstrapcdn.com
+bootstrapcdn.com
 grafana.net
 resilio.com
 docker.com
@@ -58,3 +58,4 @@ docker.io
 golang.org
 exp-tas.com
 v2raya.org
+archive.immich.app
