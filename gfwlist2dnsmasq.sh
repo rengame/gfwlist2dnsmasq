@@ -66,22 +66,22 @@ EOF
 clean_and_exit(){
     # Clean up temp files
     printf 'Cleaning up... '
-    rm -rf $TMP_DIR
+    [ -z "${TMP_DIR:-}" ] || rm -rf "$TMP_DIR"
     _green 'Done\n\n'
     [ $1 -eq 0 ] && _green 'Job Finished.\n\n' || _red 'Exit with Error code '$1'.\n'
     exit $1
 }
 
 check_depends(){
-    which sed base64 mktemp >/dev/null
-    if [ $? != 0 ]; then
-        _red 'Error: Missing Dependency.\nPlease check whether you have the following binaries on you system:\nwhich, sed, base64, mktemp.\n'
-        exit 3
-    fi
-    which curl >/dev/null
-    if [ $? != 0 ]; then
-        which wget >/dev/null
-        if [ $? != 0 ]; then
+    for dependency in sed base64 mktemp; do
+        if ! command -v "$dependency" >/dev/null 2>&1; then
+            _red "Error: Missing dependency: $dependency.\n"
+            [ "$dependency" != base64 ] || _red 'OpenWrt: apk add coreutils-base64\n'
+            exit 3
+        fi
+    done
+    if ! command -v curl >/dev/null 2>&1; then
+        if ! command -v wget >/dev/null 2>&1; then
             _red 'Error: Missing Dependency.\nEither curl or wget required.\n'
             exit 3
         fi
@@ -241,7 +241,7 @@ get_args(){
 process(){
     # Set Global Var
     BASE_URL='https://github.com/gfwlist/gfwlist/raw/master/gfwlist.txt'
-    TMP_DIR=`mktemp -d /tmp/gfwlist2dnsmasq.XXXXXX`
+    TMP_DIR=$(mktemp -d /tmp/gfwlist2dnsmasq.XXXXXX) || exit 2
     BASE64_FILE="$TMP_DIR/base64.txt"
     GFWLIST_FILE="$TMP_DIR/gfwlist.txt"
     DOMAIN_TEMP_FILE="$TMP_DIR/gfwlist2domain.tmp"
@@ -252,15 +252,22 @@ process(){
     # Fetch GfwList and decode it into plain text
     printf 'Fetching GfwList... '
     if [ $USE_WGET = 0 ]; then
-        curl -s -L $CURL_EXTARG -o$BASE64_FILE $BASE_URL
+        curl -f -sS -L --connect-timeout 10 --max-time 60 --retry 2 $CURL_EXTARG -o "$BASE64_FILE" "$BASE_URL"
     else
-        wget -q $WGET_EXTARG -O$BASE64_FILE $BASE_URL
+        wget -q -T 30 $WGET_EXTARG -O "$BASE64_FILE" "$BASE_URL"
     fi
     if [ $? != 0 ]; then
         _red '\nFailed to fetch gfwlist.txt. Please check your Internet connection, and check TLS support for curl/wget.\n'
         clean_and_exit 2
     fi
-    $BASE64_DECODE $BASE64_FILE > $GFWLIST_FILE || ( _red 'Failed to decode gfwlist.txt. Quit.\n'; clean_and_exit 2 )
+    if [ ! -s "$BASE64_FILE" ] || ! $BASE64_DECODE "$BASE64_FILE" > "$GFWLIST_FILE"; then
+        _red 'Empty download or failed to decode gfwlist.txt. Quit.\n'
+        clean_and_exit 2
+    fi
+    if ! grep -q '^\[AutoProxy' "$GFWLIST_FILE"; then
+        _red 'Invalid decoded gfwlist header. Quit.\n'
+        clean_and_exit 2
+    fi
     _green 'Done.\n\n'
 
     # Convert
@@ -320,7 +327,7 @@ nftset=/\1/4\#inet\#fw4\#'$IPSET_NAME'#g' > $CONF_TMP_FILE
         echo "# Last Updated on $(date "+%Y-%m-%d %H:%M:%S")" >> $OUT_TMP_FILE
         echo '# ' >> $OUT_TMP_FILE
         cat $CONF_TMP_FILE >> $OUT_TMP_FILE
-        cp $OUT_TMP_FILE $OUT_FILE
+        cp "$OUT_TMP_FILE" "$OUT_FILE" || clean_and_exit 2
     elif [ $OUT_TYPE = 'smartdns' ]; then
     # Convert domains into smartdns rules
         if [ $WITH_IPSET -eq 1 ]; then
@@ -337,12 +344,12 @@ ipset /\1/'$IPSET_NAME'#g' > $CONF_TMP_FILE
         echo "# Last Updated on $(date "+%Y-%m-%d %H:%M:%S")" >> $OUT_TMP_FILE
         echo '# ' >> $OUT_TMP_FILE
         cat $CONF_TMP_FILE >> $OUT_TMP_FILE
-        cp $OUT_TMP_FILE $OUT_FILE
+        cp "$OUT_TMP_FILE" "$OUT_FILE" || clean_and_exit 2
     else
         sort -u $DOMAIN_FILE > $OUT_TMP_FILE
     fi
 
-    cp $OUT_TMP_FILE $OUT_FILE
+    cp "$OUT_TMP_FILE" "$OUT_FILE" || clean_and_exit 2
     printf '\nConverting GfwList to '$OUT_TYPE'... ' && _green 'Done\n\n'
 
     # Clean up
